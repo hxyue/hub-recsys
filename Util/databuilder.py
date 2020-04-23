@@ -83,6 +83,9 @@ class DataBuilder(object):
             data.append(r)
 
         sparse_matrix = csr_matrix((data, (row, col)))
+        print(Matrix(sparse_matrix, uid_dict, iid_dict).matrix)
+
+        sss
 
         return Matrix(sparse_matrix, uid_dict, iid_dict)
 
@@ -96,5 +99,11 @@ class DataBuilder(object):
                 break
 
         tl.print_pretty(measures, eval_results)
+
+
+if __name__ == '__main__':
+    data = DataBuilder("../Data/ml-1m/ratings.dat")
+    for i in data.cv(10):
+        print(i)
 
 

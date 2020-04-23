@@ -6,17 +6,12 @@ Created on 2014-02-25
 
 import random
 import math
-import cPickle as pickle
+import pandas as pd
 
 
 class SVD():
-    def __init__(self, allfile, trainfile, testfile, factorNum=10):
-        # all data file
-        self.allfile = allfile
-        # training set file
-        self.trainfile = trainfile
-        # testing set file
-        self.testfile = testfile
+
+    def __init__(self, factorNum=10):
         # get factor number
         self.factorNum = factorNum
         # get user number
@@ -150,19 +145,14 @@ class SVD():
 
 
 if __name__ == '__main__':
-    PROJECT_PATH = "/Users/didi/Documents/HM/hub-recsys"
+
+    movies = pd.read_csv(PROJECT_PATH + '/data/ml-1m/movies.dat', sep='::',
+                         names=['MovieID', 'Title', 'Genres'], engine='python')
+    ratings = pd.read_csv(PROJECT_PATH + '/data/ml-1m/ratings.dat', sep='::',
+                          names=['UserID', 'MovieID', 'Rating', 'Timestamp'], engine='python')
+    data = ratings.merge(movies, on='MovieID', how='left')
+    data = data[['UserID', 'Rating', 'MovieID', 'Title']].sort_values('UserID')
+    userItemMatrix = {}
 
 
-    def dataRead(PROJECT_PATH):
-        movies = pd.read_csv(PROJECT_PATH + '/data/ml-1m/movies.dat', sep='::',
-                             names=['MovieID', 'Title', 'Genres'], engine='python')
-        ratings = pd.read_csv(PROJECT_PATH + '/data/ml-1m/ratings.dat', sep='::',
-                              names=['UserID', 'MovieID', 'Rating', 'Timestamp'], engine='python')
-        data = ratings.merge(movies, on='MovieID', how='left')
-        data = data[['UserID', 'Rating', 'MovieID', 'Title']].sort_values('UserID')
-        userItemMatrix = {}
-
-
-    s = SVD("data\\u.data", "data\\ua.base", "data\\ua.test")
-    # print s.userNum,s.itemNum
-    # print s.average("data\\ua.base")
+    s = SVD()

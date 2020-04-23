@@ -7,6 +7,7 @@ from scipy.sparse import lil_matrix
 from ..estimator import Estimator
 from .baseline import Baseline
 
+#模型继承评估类，可以直接使用评估类理的方法
 
 class Itemcf(Estimator):
     """
@@ -23,6 +24,10 @@ class Itemcf(Estimator):
         self.use_baseline = use_baseline
 
     def compute_cosine_similarity(self, user_num, item_num, users_ratings):
+        print(user_num, item_num)
+
+        sss
+
         sim = lil_matrix((item_num, item_num), dtype=np.double)
 
         #点积
@@ -105,3 +110,6 @@ class Itemcf(Estimator):
         if divisor != 0:
             est += sum / divisor
         return est
+
+item = Itemcf()
+item.compute_cosine_similarity(6040,3671)

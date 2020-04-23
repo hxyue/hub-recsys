@@ -35,7 +35,6 @@ class Matrix(object):
         """
         iterator(u, (is, rs))
         """
-
         for u in self.get_uids():
             yield u, self.get_user(u)
 
