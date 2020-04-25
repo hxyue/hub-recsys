@@ -25,7 +25,7 @@ class EmbeddingGRU(tf.keras.Model):
         self.target = inputs[6]
         self.max_length = 10
 
-    def DIN(self):
+    def embeddingGRU(self):
         self.mid_his_input = Input((self.max_length,), dtype='int32', name='mid_his_input')
         self.cat_his_input = Input((self.max_length,), dtype='int32', name='cat_his_input')
         self.uid_input = Input((self.n_uid,), dtype='int32', name='uid_input')
@@ -56,7 +56,7 @@ class EmbeddingGRU(tf.keras.Model):
 
 
 
-        model = Model(inputs=([self.mid_his_input, self.cat_his_input]), outputs=mid_input_embedding)
+        model = Model(inputs=([self.mid_his_input, self.cat_his_input]), outputs=item_his_eb)
 
 
         '''

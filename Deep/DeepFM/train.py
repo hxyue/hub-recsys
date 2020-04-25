@@ -1,10 +1,12 @@
-from deep_fm import DeepFM
-from preprocessor import FeatureDictionary, DataParser
+import pandas as pd
+import os
+
+from Deep.DeepFM.preprocessor import FeatureDictionary, DataParser
 
 
 def train():
-    train_file = "train.csv"
-    test_file = "test.csv"
+    train_file = '../../Data/safe-driver/test.csv'
+    test_file = '../../Data/safe-driver/test.csv'
     numeric_cols = ['ps_reg_03', 'ps_car_12','ps_car_13','ps_car_14', 'ps_car_15']
     feature_dict = FeatureDictionary(train_file, test_file, numeric_cols)
 
@@ -22,3 +24,10 @@ def train():
 
 def evaluate():
     pass
+
+
+
+path2=os.path.abspath('../../Data/safe-driver/test.csv')
+print(path2)
+pd.read_csv('../../Data/safe-driver/test.csv')
+train()

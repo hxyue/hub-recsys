@@ -22,7 +22,7 @@ class FeatureDictionary:
 
         self.df_train = pd.read_csv(self.train_file)
         self.df_test = pd.read_csv(self.test_file)
-        df = pd.concatenate([self.df_train, self.df_test])
+        df = pd.concat([self.df_train, self.df_test])
 
         for col in df.columns:
             if col in self.ignore_cols:
@@ -35,6 +35,7 @@ class FeatureDictionary:
                 self.feature_to_encoder[col] = le
                 self.feature_to_type[col] = 'cat'
             self.columns.append(col)
+        print(self.df_test)
         return self.df_train, self.df_test
 
 

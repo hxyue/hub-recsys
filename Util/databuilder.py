@@ -30,6 +30,7 @@ class DataBuilder(object):
         """
         读取数据
         """
+        print(self.file_name)
         raw_ratings = pd.read_csv(self.file_name, sep='::',
                               names=['UserID', 'MovieID', 'Rating', 'Timestamp'], engine='python')
         raw_ratings = raw_ratings.values.tolist()
