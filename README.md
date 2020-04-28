@@ -20,4 +20,5 @@ Python 3.7 + Tensorflow 2.0
    * 3.1 DeepFM
    * 3.2 DIN
    * [3.3 DIEN](Deep/DIEN)
+   * [3.4 MMOE](Deep/MMOE)
    * 待更新...
