@@ -1,10 +1,12 @@
+#coding:utf-8
+import tensorflow as tf
+from tensorflow import tensordot, expand_dims
+from tensorflow.keras import layers, Model, initializers, regularizers, activations, constraints, Input
 
-from keras import backend as K
-from keras import activations, initializers, regularizers, constraints
-from keras.engine.topology import Layer, InputSpec
 
+from tensorflow.keras.backend import expand_dims,repeat_elements,sum
 
-class MMoE(Layer):
+class MMoE(layers.Layer):
     """
     Multi-gate Mixture-of-Experts model.
     """
@@ -55,6 +57,8 @@ class MMoE(Layer):
         :param activity_regularizer: Regularizer for the activity
         :param kwargs: Additional keyword arguments for the Layer class
         """
+        super(MMoE, self).__init__(**kwargs)
+
         # Hidden nodes parameter
         self.units = units
         self.num_experts = num_experts
@@ -71,8 +75,9 @@ class MMoE(Layer):
         self.gate_kernel_constraint = constraints.get(gate_kernel_constraint)
 
         # Activation parameter
-        self.expert_activation = activations.get(expert_activation)
-        self.gate_activation = activations.get(gate_activation)
+        #self.expert_activation = activations.get(expert_activation)
+        self.expert_activation = expert_activation
+        self.gate_activation = gate_activation
 
         # Bias parameter
         self.expert_bias = None
@@ -89,140 +94,55 @@ class MMoE(Layer):
         # Activity parameter
         self.activity_regularizer = regularizers.get(activity_regularizer)
 
-        # Keras parameter
-        self.input_spec = InputSpec(min_ndim=2)
-        self.supports_masking = True
+        self.expert_layers = []
+        self.gate_layers = []
+        for i in range(self.num_experts):
+            self.expert_layers.append(layers.Dense(self.units, activation=self.expert_activation,
+                                                   use_bias=self.use_expert_bias,
+                                                   kernel_initializer=self.expert_kernel_initializer,
+                                                   bias_initializer=self.expert_bias_initializer,
+                                                   kernel_regularizer=self.expert_kernel_regularizer,
+                                                   bias_regularizer=self.expert_bias_regularizer,
+                                                   activity_regularizer=None,
+                                                   kernel_constraint=self.expert_kernel_constraint,
+                                                   bias_constraint=self.expert_bias_constraint))
+        for i in range(self.num_tasks):
+            self.gate_layers.append(layers.Dense(self.num_experts, activation=self.gate_activation,
+                                                 use_bias=self.use_gate_bias,
+                                                 kernel_initializer=self.gate_kernel_initializer,
+                                                 bias_initializer=self.gate_bias_initializer,
+                                                 kernel_regularizer=self.gate_kernel_regularizer,
+                                                 bias_regularizer=self.gate_bias_regularizer, activity_regularizer=None,
+                                                 kernel_constraint=self.gate_kernel_constraint,
+                                                 bias_constraint=self.gate_bias_constraint))
 
-        super(MMoE, self).__init__(**kwargs)
-
-    def build(self, input_shape):
-        """
-        Method for creating the layer weights.
-        :param input_shape: Keras tensor (future input to layer)
-                            or list/tuple of Keras tensors to reference
-                            for weight shape computations
-        """
-        assert input_shape is not None and len(input_shape) >= 2
-
-        input_dimension = input_shape[-1]
-
-        # Initialize expert weights (number of input features * number of units per expert * number of experts)
-        self.expert_kernels = self.add_weight(
-            name='expert_kernel',
-            shape=(input_dimension, self.units, self.num_experts),
-            initializer=self.expert_kernel_initializer,
-            regularizer=self.expert_kernel_regularizer,
-            constraint=self.expert_kernel_constraint,
-        )
-
-        # Initialize expert bias (number of units per expert * number of experts)
-        if self.use_expert_bias:
-            self.expert_bias = self.add_weight(
-                name='expert_bias',
-                shape=(self.units, self.num_experts),
-                initializer=self.expert_bias_initializer,
-                regularizer=self.expert_bias_regularizer,
-                constraint=self.expert_bias_constraint,
-            )
-
-        # Initialize gate weights (number of input features * number of experts * number of tasks)
-        self.gate_kernels = [self.add_weight(
-            name='gate_kernel_task_{}'.format(i),
-            shape=(input_dimension, self.num_experts),
-            initializer=self.gate_kernel_initializer,
-            regularizer=self.gate_kernel_regularizer,
-            constraint=self.gate_kernel_constraint
-        ) for i in range(self.num_tasks)]
-
-        # Initialize gate bias (number of experts * number of tasks)
-        if self.use_gate_bias:
-            self.gate_bias = [self.add_weight(
-                name='gate_bias_task_{}'.format(i),
-                shape=(self.num_experts,),
-                initializer=self.gate_bias_initializer,
-                regularizer=self.gate_bias_regularizer,
-                constraint=self.gate_bias_constraint
-            ) for i in range(self.num_tasks)]
-
-        self.input_spec = InputSpec(min_ndim=2, axes={-1: input_dimension})
-
-        super(MMoE, self).build(input_shape)
-
-    def call(self, inputs, **kwargs):
+    def call(self, inputs):
         """
         Method for the forward function of the layer.
         :param inputs: Input tensor
         :param kwargs: Additional keyword arguments for the base method
         :return: A tensor
         """
-        gate_outputs = []
-        final_outputs = []
+        #assert input_shape is not None and len(input_shape) >= 2
 
-        # f_{i}(x) = activation(W_{i} * x + b), where activation is ReLU according to the paper
-        expert_outputs = K.tf.tensordot(a=inputs, b=self.expert_kernels, axes=1)
-        # Add the bias term to the expert weights if necessary
-        if self.use_expert_bias:
-            expert_outputs = K.bias_add(x=expert_outputs, bias=self.expert_bias)
-        expert_outputs = self.expert_activation(expert_outputs)
+        expert_outputs, gate_outputs, final_outputs = [], [], []
+        for expert_layer in self.expert_layers:
+            expert_output = expand_dims(expert_layer(inputs), axis=2)
+            expert_outputs.append(expert_output)
+        expert_outputs = tf.concat(expert_outputs,2)
 
-        # g^{k}(x) = activation(W_{gk} * x + b), where activation is softmax according to the paper
-        for index, gate_kernel in enumerate(self.gate_kernels):
-            gate_output = K.dot(x=inputs, y=gate_kernel)
-            # Add the bias term to the gate weights if necessary
-            if self.use_gate_bias:
-                gate_output = K.bias_add(x=gate_output, bias=self.gate_bias[index])
-            gate_output = self.gate_activation(gate_output)
-            gate_outputs.append(gate_output)
+        for gate_layer in self.gate_layers:
+            gate_outputs.append(gate_layer(inputs))
 
-        # f^{k}(x) = sum_{i=1}^{n}(g^{k}(x)_{i} * f_{i}(x))
         for gate_output in gate_outputs:
-            expanded_gate_output = K.expand_dims(gate_output, axis=1)
-            weighted_expert_output = expert_outputs * K.repeat_elements(expanded_gate_output, self.units, axis=1)
-            final_outputs.append(K.sum(weighted_expert_output, axis=2))
-
+            expanded_gate_output = expand_dims(gate_output, axis=1)
+            weighted_expert_output = expert_outputs * repeat_elements(expanded_gate_output, self.units, axis=1)
+            final_outputs.append(sum(weighted_expert_output, axis=2))
+        # 返回的矩阵维度 num_tasks * batch * units
         return final_outputs
 
-    def compute_output_shape(self, input_shape):
-        """
-        Method for computing the output shape of the MMoE layer.
-        :param input_shape: Shape tuple (tuple of integers)
-        :return: List of input shape tuple where the size of the list is equal to the number of tasks
-        """
-        assert input_shape is not None and len(input_shape) >= 2
 
-        output_shape = list(input_shape)
-        output_shape[-1] = self.units
-        output_shape = tuple(output_shape)
+mmoe = MMoE(units=16,num_experts=8,num_tasks=2)
+mmoe(tf.zeros((4, 1)))
 
-        return [output_shape for _ in range(self.num_tasks)]
 
-    def get_config(self):
-        """
-        Method for returning the configuration of the MMoE layer.
-        :return: Config dictionary
-        """
-        config = {
-            'units': self.units,
-            'num_experts': self.num_experts,
-            'num_tasks': self.num_tasks,
-            'use_expert_bias': self.use_expert_bias,
-            'use_gate_bias': self.use_gate_bias,
-            'expert_activation': activations.serialize(self.expert_activation),
-            'gate_activation': activations.serialize(self.gate_activation),
-            'expert_bias_initializer': initializers.serialize(self.expert_bias_initializer),
-            'gate_bias_initializer': initializers.serialize(self.gate_bias_initializer),
-            'expert_bias_regularizer': regularizers.serialize(self.expert_bias_regularizer),
-            'gate_bias_regularizer': regularizers.serialize(self.gate_bias_regularizer),
-            'expert_bias_constraint': constraints.serialize(self.expert_bias_constraint),
-            'gate_bias_constraint': constraints.serialize(self.gate_bias_constraint),
-            'expert_kernel_initializer': initializers.serialize(self.expert_kernel_initializer),
-            'gate_kernel_initializer': initializers.serialize(self.gate_kernel_initializer),
-            'expert_kernel_regularizer': regularizers.serialize(self.expert_kernel_regularizer),
-            'gate_kernel_regularizer': regularizers.serialize(self.gate_kernel_regularizer),
-            'expert_kernel_constraint': constraints.serialize(self.expert_kernel_constraint),
-            'gate_kernel_constraint': constraints.serialize(self.gate_kernel_constraint),
-            'activity_regularizer': regularizers.serialize(self.activity_regularizer)
-        }
-        base_config = super(MMoE, self).get_config()
-
-        return dict(list(base_config.items()) + list(config.items()))
