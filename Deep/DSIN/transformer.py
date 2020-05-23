@@ -1,91 +1,183 @@
-from __future__ import absolute_import, division, print_function, unicode_literals
-# 安装tfds pip install tfds-nightly==1.0.2.dev201904090105
-import tensorflow_datasets as tfds
-import tensorflow as tf
-import tensorflow.keras.layers as layers
-
-import time
+'''
+@Description:
+@version:
+@License: MIT
+@Author: Wang Yao
+@Date: 2020-03-23 19:42:15
+@LastEditors: Wang Yao
+@LastEditTime: 2020-03-27 17:50:33
+'''
+import os
 import numpy as np
-# import matplotlib.pyplot as plt
-print(tf.__version__)
+import tensorflow as tf
+import tensorflow.keras.backend as K
+from tensorflow.keras.callbacks import Callback
+from layers import PositionEncoding
+from layers import MultiHeadAttention, PositionWiseFeedForward
+from layers import Add, LayerNormalization
 
-# Portugese-English翻译数据集。
-examples, metadata = tfds.load('ted_hrlr_translate/pt_to_en', with_info=True,as_supervised=True)
-
-# 将数据转化为subwords格式
-train_examples, val_examples = examples['train'], examples['validation']
-tokenizer_en = tfds.features.text.SubwordTextEncoder.build_from_corpus(
-(en.numpy() for pt, en in train_examples), target_vocab_size=2**13)
-tokenizer_pt = tfds.features.text.SubwordTextEncoder.build_from_corpus(
-(pt.numpy() for pt, en in train_examples), target_vocab_size=2**13)
-
-# token转化测试
-sample_str = 'hello world, tensorflow 2'
-tokenized_str = tokenizer_en.encode(sample_str)
-print(tokenized_str)
-original_str = tokenizer_en.decode(tokenized_str)
-print(original_str)
-# [3222, 439, 150, 7345, 1378, 2824, 2370, 7881]
-# hello world, tensorflow 2
+tf.config.experimental_run_functions_eagerly(True)
 
 
-# 添加start、end的token表示
-def encode(lang1, lang2):
-    lang1 = [tokenizer_pt.vocab_size] + tokenizer_pt.encode(
-        lang1.numpy()) + [tokenizer_pt.vocab_size+1]
-    lang2 = [tokenizer_en.vocab_size] + tokenizer_en.encode(
-        lang2.numpy()) + [tokenizer_en.vocab_size+1]
-    return lang1, lang2
+class Transformer(tf.keras.layers.Layer):
+
+    def __init__(self, vocab_size, model_dim,
+                 n_heads=8, encoder_stack=6, decoder_stack=6, feed_forward_size=2048, dropout_rate=0.1, **kwargs):
+        self._vocab_size = vocab_size
+        self._model_dim = model_dim
+        self._n_heads = n_heads
+        self._encoder_stack = encoder_stack
+        self._decoder_stack = decoder_stack
+        self._feed_forward_size = feed_forward_size
+        self._dropout_rate = dropout_rate
+        super(Transformer, self).__init__(**kwargs)
+
+    def build(self, input_shape):
+        self.embeddings = self.add_weight(
+            shape=(self._vocab_size, self._model_dim),
+            initializer='glorot_uniform',
+            trainable=True,
+            name="embeddings")
+        super(Transformer, self).build(input_shape)
+
+    def encoder(self, inputs):
+        if K.dtype(inputs) != 'int32':
+            inputs = K.cast(inputs, 'int32')
+
+        masks = K.equal(inputs, 0)
+        # Embeddings
+        embeddings = K.gather(self.embeddings, inputs)
+        embeddings *= self._model_dim ** 0.5  # Scale
+        # Position Encodings
+        position_encodings = PositionEncoding(self._model_dim)(embeddings)
+        # Embedings + Postion-encodings
+        encodings = embeddings + position_encodings
+        # Dropout
+        encodings = tf.nn.dropout(encodings, self._dropout_rate)
+
+        for i in range(self._encoder_stack):
+            # Multi-head-Attention
+            attention = MultiHeadAttention(self._n_heads, self._model_dim // self._n_heads)
+            attention_input = [encodings, encodings, encodings, masks]
+            attention_out = attention(attention_input)
+            # Add & Norm
+            attention_out += encodings
+            attention_out = LayerNormalization()(attention_out)
+            # Feed-Forward
+            ff = PositionWiseFeedForward(self._model_dim, self._feed_forward_size)
+            ff_out = ff(attention_out)
+            # Add & Norm
+            ff_out += attention_out
+            encodings = LayerNormalization()(ff_out)
+
+        return encodings, masks
+
+    def decoder(self, inputs):
+        decoder_inputs, encoder_encodings, encoder_masks = inputs
+        if K.dtype(decoder_inputs) != 'int32':
+            decoder_inputs = K.cast(decoder_inputs, 'int32')
+
+        decoder_masks = K.equal(decoder_inputs, 0)
+        # Embeddings
+        embeddings = K.gather(self.embeddings, decoder_inputs)
+        embeddings *= self._model_dim ** 0.5  # Scale
+        # Position Encodings
+        position_encodings = PositionEncoding(self._model_dim)(embeddings)
+        # Embedings + Postion-encodings
+        encodings = embeddings + position_encodings
+        # Dropout
+        encodings = tf.nn.dropout(encodings, self._dropout_rate)
+
+        for i in range(self._decoder_stack):
+            # Masked-Multi-head-Attention
+            masked_attention = MultiHeadAttention(self._n_heads, self._model_dim // self._n_heads, future=True)
+            masked_attention_input = [encodings, encodings, encodings, decoder_masks]
+            masked_attention_out = masked_attention(masked_attention_input)
+            # Add & Norm
+            masked_attention_out += encodings
+            masked_attention_out = LayerNormalization()(masked_attention_out)
+
+            # Multi-head-Attention
+            attention = MultiHeadAttention(self._n_heads, self._model_dim // self._n_heads)
+            attention_input = [masked_attention_out, encoder_encodings, encoder_encodings, encoder_masks]
+            attention_out = attention(attention_input)
+            # Add & Norm
+            attention_out += masked_attention_out
+            attention_out = LayerNormalization()(attention_out)
+
+            # Feed-Forward
+            ff = PositionWiseFeedForward(self._model_dim, self._feed_forward_size)
+            ff_out = ff(attention_out)
+            # Add & Norm
+            ff_out += attention_out
+            encodings = LayerNormalization()(ff_out)
+
+        # Pre-Softmax 与 Embeddings 共享参数
+        linear_projection = K.dot(encodings, tf.transpose(self.embeddings))
+        outputs = K.softmax(linear_projection)
+        return outputs
+
+    def call(self, inputs):
+        encoder_inputs, decoder_inputs = inputs
+        encoder_encodings, encoder_masks = self.encoder(encoder_inputs)
+        print(encoder_encodings)
+        encoder_outputs = self.decoder([decoder_inputs, encoder_encodings, encoder_masks])
+        print(encoder_outputs)
+        return encoder_outputs
+
+    def compute_output_shape(self, input_shape):
+        return (input_shape[0][0], input_shape[0][1], self._vocab_size)
 
 
-# 过滤长度超过40的数据
-MAX_LENGTH=40
-def filter_long_sent(x, y, max_length=MAX_LENGTH):
-    return tf.logical_and(tf.size(x) <= max_length,
-                         tf.size(y) <= max_length)
+class Noam(Callback):
 
-# 将python运算，转换为tensorflow运算节点
-def tf_encode(pt, en):
-    return tf.py_function(encode, [pt, en], [tf.int64, tf.int64])
+    def __init__(self, model_dim, step_num=0, warmup_steps=4000, verbose=False, **kwargs):
+        self._model_dim = model_dim
+        self._step_num = step_num
+        self._warmup_steps = warmup_steps
+        self.verbose = verbose
+        super(Noam, self).__init__(**kwargs)
 
-# ----构造数据集
-BUFFER_SIZE = 20000
-BATCH_SIZE = 64
+    def on_train_begin(self, logs=None):
+        logs = logs or {}
+        init_lr = self._model_dim ** -.5 * self._warmup_steps ** -1.5
+        K.set_value(self.model.optimizer.lr, init_lr)
 
-# 使用.map()运行相关图操作
-train_dataset = train_examples.map(tf_encode)
-# 过滤过长的数据
-train_dataset = train_dataset.filter(filter_long_sent)
-# 使用缓存数据加速读入
-train_dataset = train_dataset.cache()
-# 打乱并获取批数据
-train_dataset = train_dataset.padded_batch(
-BATCH_SIZE, padded_shapes=([40], [40]))  # 填充为最大长度-90
-# 设置预取数据
-train_dataset = train_dataset.prefetch(tf.data.experimental.AUTOTUNE)
+    def on_batch_end(self, epoch, logs=None):
+        logs = logs or {}
+        self._step_num += 1
+        lrate = self._model_dim ** -.5 * K.minimum(self._step_num ** -.5, self._step_num * self._warmup_steps ** -1.5)
+        K.set_value(self.model.optimizer.lr, lrate)
 
-# 验证集数据
-val_dataset = val_examples.map(tf_encode)
-val_dataset = val_dataset.filter(filter_long_sent).padded_batch(
-BATCH_SIZE, padded_shapes=([40], [40]))
-de_batch, en_batch = next(iter(train_dataset))
-de_batch, en_batch
+    def on_epoch_begin(self, epoch, logs=None):
+        if self.verbose:
+            lrate = K.get_value(self.model.optimizer.lr)
+            print(f"epoch {epoch} lr: {lrate}")
 
-# --2.位置嵌入
+    def on_epoch_end(self, epoch, logs=None):
+        logs = logs or {}
+        logs['lr'] = K.get_value(self.model.optimizer.lr)
 
-def get_angles(pos, i, d_model):
-    # 这里的i等价与上面公式中的2i和2i+1
-    angle_rates = 1 / np.power(10000, (2*(i // 2))/ np.float32(d_model))
-    return pos * angle_rates
-def positional_encoding(position, d_model):
-    angle_rads = get_angles(np.arange(position)[:, np.newaxis],
-                           np.arange(d_model)[np.newaxis,:],
-                           d_model)
-    # 第2i项使用sin
-    sines = np.sin(angle_rads[:, 0::2])
-    # 第2i+1项使用cos
-    cones = np.cos(angle_rads[:, 1::2])
-    pos_encoding = np.concatenate([sines, cones], axis=-1)
-    pos_encoding = pos_encoding[np.newaxis, ...]
 
-    return tf.cast(pos_encoding, dtype=tf.float32)
+def label_smoothing(inputs, epsilon=0.1):
+    output_dim = inputs.shape[-1]
+    smooth_label = (1 - epsilon) * inputs + (epsilon / output_dim)
+    return smooth_label
+
+
+if __name__ == "__main__":
+    from tensorflow.keras.models import Model
+    from tensorflow.keras.layers import Input
+    from tensorflow.keras.utils import plot_model
+
+    vocab_size = 5000
+    max_seq_len = 256
+    model_dim = 512
+
+    encoder_inputs = Input(shape=(max_seq_len,), name='encoder_inputs')
+    decoder_inputs = Input(shape=(max_seq_len,), name='decoder_inputs')
+    outputs = Transformer(vocab_size, model_dim)([encoder_inputs, decoder_inputs])
+    model = Model(inputs=[encoder_inputs, decoder_inputs], outputs=outputs)
+
+    model.summary()
+    plot_model(model, 'transformer.png')
